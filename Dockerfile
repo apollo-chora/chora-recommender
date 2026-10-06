@@ -25,6 +25,7 @@ FROM golang:${GO_VERSION}-alpine${ALPINE_VERSION} AS builder
 ARG SERVICE_NAME
 ARG GIT_SHA
 ARG BUILD_TIME
+ARG TARGETARCH
 
 WORKDIR /src
 
@@ -36,7 +37,7 @@ RUN go mod download
 
 ENV CGO_ENABLED=0 \
     GOOS=linux \
-    GOARCH=amd64
+    GOARCH=${TARGETARCH}
 
 # A service image that ships with a failing test is worse than no image:
 # the failure would surface only at runtime in a downstream stack.
