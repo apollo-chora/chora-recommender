@@ -1,112 +1,40 @@
 # chora-recommender
 
-Content Recommender crew for Chora — a P1 single-agent ReAct ADK-Go agent
-(Google `google.golang.org/adk` framework) that surfaces 3-5 ranked
-LearningAtoms for a learner, biased by persona + topic hint. It serves the
-Phyllis Step 8 daily-dose 40% slot.
+## About
 
-Module path: `github.com/apollo-chora/chora-recommender`.
+`chora-recommender` is a Go service that exposes a single ADK agent, `content_recommender`, for returning 3-5 ranked LearningAtom recommendations for a learner. Recommendation context comes from ADK session state, including the tenant, learner identity, persona, and optional topic hint; ranked atom candidates can be injected into that state, with a gRPC fallback to `chora-consumption`. LLM calls are sent through `chora-model-gateway`, and the service exposes the standard ADK REST API on port 8080.
 
-The crew is cloud-neutral: it serves the standard ADK REST API, calls the
-model broker (`chora-model-gateway`) over gRPC for every LLM turn, and
-optionally dials `chora-consumption` for real atom recommendations. No cloud
-account or managed service is required.
+## Quick start
 
-## What it does
+Prerequisites:
 
-1. **Serves the standard ADK REST API** on `:8080` — session create/list,
-   agent run (JSON events), and SSE stream.
-2. **Ranks atoms per learner** via the `recommend_atoms_for_learner` tool.
-   The primary path reads pre-fetched, pre-ranked atom candidates injected
-   into the ADK session state by the caller (`chora-consumption`, which owns
-   the `atom_index` projection) — no backend dial. The fallback path dials
-   `chora-consumption` gRPC, or returns deterministic stub atoms when
-   `CONSUMPTION_GRPC_ENDPOINT=stub://…`.
-3. **Composes its instruction per turn** from live session state
-   (`tenant_id` / `user_gcid` / `learner_persona` / `topic_hint`) via an
-   `InstructionProvider`, so the model always sees the real runtime context.
-4. **Routes every LLM call through the model broker** (`chora-model-gateway`)
-   with per-request tenant/gcid propagation and the `content_recommendation`
-   action code, so mana metering + cost attribution stay centralized.
-5. **Emits `chora.ai_kernel.agent.terminated.v1`** on every agent-run boundary
-   exit (structured log event via `terminationplugin`).
+- Go 1.26.6
+- A reachable `chora-model-gateway`, or a local gateway running without TLS for development
+- Docker is optional
 
-## Architecture
-
-- **Compute**: any host running the Go binary or the container image.
-- **Sessions**: in-memory only (`session.InMemoryService`). A recommend
-  turn's session must hit the same instance, so run replicas=1.
-- **Model calls**: gRPC to `chora-model-gateway` (via
-  `chora-adk-common/modelgatewayclient`); TLS + `CHORA_GATEWAY_TOKEN` in
-  production, plaintext with `CHORA_GATEWAY_INSECURE=1` for local dev.
-- **Traces**: standard OTLP via `chora-common/otel`
-  (`OTEL_EXPORTER_OTLP_ENDPOINT`; stdout when unset).
-- **Events**: none — the termination event is a structured log record, not a
-  bus message. No NATS required.
-- **Database**: none.
-
-## HTTP surface
-
-The `{app}` path segment is the ADK agent name: `content_recommender` (or
-empty). The single-agent loader accepts both.
-
-| Method | Path | Purpose |
-|---|---|---|
-| `POST` | `/api/apps/{app}/users/{user}/sessions` | Create session (state rides in the body) |
-| `POST` | `/api/apps/{app}/users/{user}/sessions/{id}` | Create session with explicit id |
-| `GET` | `/api/apps/{app}/users/{user}/sessions/{id}` | Fetch session |
-| `DELETE` | `/api/apps/{app}/users/{user}/sessions/{id}` | Delete session |
-| `POST` | `/api/run` | Run the agent (JSON event list) |
-| `POST` | `/api/run_sse` | Run the agent (SSE stream) |
-
-Session state carries the per-learner context the tool and the instruction
-provider read:
-
-```json
-{
-  "tenant_id": "<tenant-uuid>",
-  "user_gcid": "<gcid>",
-  "learner_persona": "curious-explorer",
-  "topic_hint": "graph-algorithms",
-  "atom_candidates": "[{\"atom_id\":\"atom-1\",\"title\":\"…\",\"snippet\":\"…\"}]"
-}
-```
-
-`tenant_id` is required (RLS-bearing — the recommend tool refuses without
-it). `user_gcid` (or the `learner_gcid` alias) identifies the learner.
-`atom_candidates` is the pre-fetched ranked slate written by the caller.
-
-## Configuration
-
-| Variable | Purpose | Local default |
-| --- | --- | --- |
-| `PORT` | REST API listen port | `8080` |
-| `RECOMMENDER_MODEL` | Ops override of the agentconfig primary model | `gemini-3.1-pro-preview` (HIGH tier) |
-| `CHORA_GATEWAY_ENDPOINT` | Model-gateway gRPC target | `gateway.chora.site:443` |
-| `CHORA_GATEWAY_TENANT_ID` | Process-fallback tenant for gateway Invoke | unset (required) |
-| `CHORA_GATEWAY_GCID` | Process-fallback actor for gateway Invoke | unset (required) |
-| `CHORA_GATEWAY_AUDIENCE` | Audience of the gateway token | `https://gateway.chora.site` |
-| `CHORA_GATEWAY_TOKEN` | Static bearer token for the gateway | unset |
-| `CHORA_GATEWAY_INSECURE` | Plaintext gRPC to a local gateway (dev only) | unset |
-| `CONSUMPTION_GRPC_ENDPOINT` | Atom source: `stub://…` for deterministic stubs, gRPC URL for real atoms | `stub://chora-consumption` |
-| `TENANCY_GRPC_ENDPOINT` | Tenancy service (reserved) | `stub://chora-tenancy` |
-| `CREATION_GRPC_ENDPOINT` | Creation service (reserved, `cite_atom`) | `stub://chora-creation` |
-| `CHORA_ENV` | Environment label | `dev` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP trace endpoint | stdout |
-| `CHORA_SERVICE_VERSION` | Stamped as the OTLP `service.version` attribute | `dev` |
-
-## Build and test
+Build and test the service:
 
 ```sh
 go build ./...
 go vet ./...
-gofmt -l .   # must be empty
 go test ./...
 ```
 
-The suite is hermetic — no broker, database, gateway, or network is required.
+Run it locally with the default stub recommendation source:
 
-## Docker
+```sh
+export CHORA_GATEWAY_TENANT_ID=tenant-1
+export CHORA_GATEWAY_GCID=gcid-1
+export CHORA_GATEWAY_ENDPOINT=localhost:9090
+export CHORA_GATEWAY_INSECURE=1
+export CONSUMPTION_GRPC_ENDPOINT=stub://chora-consumption
+
+go run ./cmd/recommender
+```
+
+The server listens on `http://localhost:8080` by default.
+
+To build the container image:
 
 ```sh
 docker build -t chora-recommender .
@@ -118,5 +46,83 @@ docker run --rm -p 8080:8080 \
   chora-recommender
 ```
 
-The image is multi-stage (build + vet + test → distroless static, nonroot)
-and builds from this repository's context alone.
+## Usage
+
+The service uses the ADK REST API. The supported routes are:
+
+| Method | Path | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/apps/{app}/users/{user}/sessions` | Create a session |
+| `POST` | `/api/apps/{app}/users/{user}/sessions/{id}` | Create a session with an explicit ID |
+| `GET` | `/api/apps/{app}/users/{user}/sessions/{id}` | Fetch a session |
+| `DELETE` | `/api/apps/{app}/users/{user}/sessions/{id}` | Delete a session |
+| `POST` | `/api/run` | Run the agent and return JSON events |
+| `POST` | `/api/run_sse` | Run the agent as an SSE stream |
+
+Use `content_recommender` as the ADK app name in the request path. Callers create a session first, then run turns against that session.
+
+Session state provides the trusted per-learner context used by the agent and recommendation tool:
+
+```json
+{
+  "tenant_id": "<tenant-uuid>",
+  "user_gcid": "<gcid>",
+  "learner_persona": "curious-explorer",
+  "topic_hint": "graph-algorithms",
+  "atom_candidates": "[{\"atom_id\":\"atom-1\",\"title\":\"...\",\"snippet\":\"...\"}]"
+}
+```
+
+`tenant_id` is required by the recommendation tool. `user_gcid` identifies the learner; `learner_gcid` is accepted as an alias. `learner_persona` supports `curious-explorer`, `cert-focused`, and `social-leader`, with `curious-explorer` as the fallback. `topic_hint` is optional. When `atom_candidates` contains a valid non-empty JSON list, those candidates are used directly; otherwise the service uses its configured searcher.
+
+The `recommend_atoms_for_learner` tool accepts a learner GCID plus optional persona, topic hint, and limit. The default limit is 5 and the maximum is 10.
+
+Configuration is controlled with environment variables:
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `PORT` | HTTP listen port | `8080` |
+| `RECOMMENDER_MODEL` | Override the configured primary model | `gemini-3.1-pro-preview` |
+| `CHORA_GATEWAY_ENDPOINT` | Model gateway gRPC target | `gateway.chora.site:443` |
+| `CHORA_GATEWAY_TENANT_ID` | Process-level fallback tenant for gateway calls | unset; required |
+| `CHORA_GATEWAY_GCID` | Process-level fallback actor for gateway calls | unset; required |
+| `CHORA_GATEWAY_AUDIENCE` | Gateway token audience | `https://gateway.chora.site` |
+| `CHORA_GATEWAY_TOKEN` | Static bearer token for the gateway | unset |
+| `CHORA_GATEWAY_INSECURE` | Use plaintext gRPC for a local gateway | unset |
+| `CONSUMPTION_GRPC_ENDPOINT` | Recommendation source; `stub://...` enables deterministic stubs | `stub://chora-consumption` |
+| `TENANCY_GRPC_ENDPOINT` | Tenancy endpoint | `stub://chora-tenancy` |
+| `CREATION_GRPC_ENDPOINT` | Creation endpoint | `stub://chora-creation` |
+| `CHORA_ENV` | Environment label | `dev` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | OTLP trace endpoint | stdout |
+| `CHORA_SERVICE_VERSION` | OTLP `service.version` value | `dev` |
+
+For production gateway connections, leave `CHORA_GATEWAY_INSECURE` unset so the client uses TLS and `CHORA_GATEWAY_TOKEN`.
+
+The embedded agent configuration in `internal/agentconfig/recommender.yaml` defines the `recommend` sub-agent as HIGH tier, with `gemini-3.1-pro-preview` as the primary model, `gemini-2.5-pro` as its fallback, and prompt version `v1`. `RECOMMENDER_MODEL` can override the primary model without changing the configured fallback chain.
+
+## Development
+
+The repository is organized around the service entry point, agent composition, configuration, and recommendation adapter:
+
+```text
+cmd/recommender/                  Service entry point and HTTP server
+internal/agent/                   Prompt composition and per-turn instruction provider
+internal/agentconfig/             Embedded model and prompt configuration
+internal/tool/                    Recommendation tool and Searcher port
+internal/adapter/consumptionrag/  gRPC adapter for chora-consumption
+```
+
+The application entry point is `cmd/recommender/main.go`. The recommender prompt is composed per turn from session state in `internal/agent/composer.go`, with few-shot fixtures under `internal/agent/few_shots/`. The production recommendation adapter calls the `RecommendAtomsForLearner` RPC exposed by `chora-consumption`.
+
+Run the full local verification suite:
+
+```sh
+gofmt -l .
+go mod tidy
+go vet ./...
+go test ./...
+```
+
+CI runs the same formatting, module-consistency, vet, and test checks on pushes and pull requests targeting `main`.
+
+The test suite does not require a live broker, database, gateway, or recommendation backend. For container builds, the Dockerfile runs the build, vet, and tests in a Go builder stage, then copies the binary into a distroless nonroot runtime image.
