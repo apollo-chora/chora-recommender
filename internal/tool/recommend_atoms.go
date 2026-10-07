@@ -22,7 +22,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 
 	"go.opentelemetry.io/otel"
@@ -174,50 +173,6 @@ func RecommendWithSearcher(ctx context.Context, state StateReader, searcher Sear
 	return RecommendAtomsResponse{Atoms: atoms}, nil
 }
 
-// RecommendAtomsForLearner is the legacy entry point that resolves a Searcher
-// from CONSUMPTION_GRPC_ENDPOINT and delegates to RecommendWithSearcher. It is
-// retained for the stub smoke path + callers that pass a plain context.Context
-// (no session state) — in that case tenant/gcid come from the request. The ADK
-// handler (cmd/recommender) calls RecommendWithSearcher directly with the tool
-// session state + the boot-injected real Searcher.
-func RecommendAtomsForLearner(ctx context.Context, req RecommendAtomsRequest) (RecommendAtomsResponse, error) {
-	endpoint := os.Getenv("CONSUMPTION_GRPC_ENDPOINT")
-	if endpoint == "" {
-		return RecommendAtomsResponse{}, errors.New(
-			"CONSUMPTION_GRPC_ENDPOINT not set; refusing inline default " +
-				"per feedback_no_inline_config")
-	}
-
-	limit := req.Limit
-	if limit <= 0 {
-		limit = defaultLimit
-	}
-	if limit > maxLimit {
-		limit = maxLimit
-	}
-
-	if strings.HasPrefix(endpoint, "stub://") {
-		atoms := make([]Atom, 0, limit)
-		for i := 0; i < limit; i++ {
-			atoms = append(atoms, Atom{
-				AtomID: fmt.Sprintf("atom-stub-%03d", i),
-				Title:  fmt.Sprintf("%s — stub atom %d", safe(req.TopicHint, "general"), i+1),
-				Snippet: fmt.Sprintf("[persona=%s] For learner %s, atom %d on %s (stub).",
-					safe(req.Persona, "default"), safePrefix(req.LearnerGCID, 8), i+1, safe(req.TopicHint, "general")),
-				RankScore: 0.95 - 0.07*float64(i),
-			})
-		}
-		return RecommendAtomsResponse{Atoms: atoms}, nil
-	}
-
-	// Non-stub endpoint but no Searcher wired through this legacy path: the
-	// real path runs through RecommendWithSearcher from the ADK handler with
-	// the boot-injected gRPC adapter. Fail loud rather than silently stubbing.
-	return RecommendAtomsResponse{}, errors.New(
-		"recommend: non-stub CONSUMPTION_GRPC_ENDPOINT requires the boot-injected " +
-			"gRPC Searcher — call RecommendWithSearcher from the ADK handler")
-}
-
 // StubSearcher is the deterministic in-process Searcher used for sandbox smoke
 // (CONSUMPTION_GRPC_ENDPOINT=stub://…). It biases the snippet by topic so the
 // e2e pipe is exercised without a live chora-consumption. NEVER use in prod.
@@ -285,11 +240,4 @@ func safe(s, fallback string) string {
 		return fallback
 	}
 	return s
-}
-
-func safePrefix(s string, n int) string {
-	if len(s) < n {
-		return s
-	}
-	return s[:n]
 }
