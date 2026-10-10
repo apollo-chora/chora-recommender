@@ -7,15 +7,17 @@
 # feedback_mana_is_quota_not_model_selector). Model selection is config-driven
 # here, not mana-driven.
 #
-# Tiers (locked, mirrors qgen):
-#   HIGH  = reasoning / ranking-quality agents → gemini-3.1-pro-preview → gemini-2.5-pro
-#   CHEAP = retrieval / scoring / light agents → gemini-3.5-flash       → gemini-2.5-flash
+# Tiers (single-route deployment): every tier — HIGH reasoning / ranking-quality
+# as well as CHEAP retrieval / scoring / light agents — now routes to the one
+# logical model longcat-2.5-preview (LongCat-2.5-Preview via the
+# chora-model-gateway registry). The old HIGH/CHEAP tier ladder collapsed to
+# this single route; the `tier` field is retained as a descriptive label only.
 #
 # The single sub-agent `recommend` IS the P1 ReAct ranker: it reasons over
 # learner persona + topic_hint + the recommend_atoms tool's retrieval slate to
 # RANK and JUSTIFY a 3-5 atom slate (daily-dose 40% slot). Ranking quality is
-# the whole product, so it is HIGH tier — gemini-3.1-pro-preview (global-only;
-# fallback gemini-2.5-pro).
+# the whole product, so it stays the HIGH tier sub-agent — longcat-2.5-preview
+# (fallback longcat-2.5-preview: single-provider deployment).
 #
 # Recommender calls the model broker (chora-model-gateway) via
 # modelgatewayclient, so fallback_models feeds InvokeRequest.fallback_logical_
@@ -26,6 +28,6 @@ agent: content_recommender
 sub_agents:
   recommend:
     tier: high
-    primary_model: gemini-3.1-pro-preview
-    fallback_models: [gemini-2.5-pro]
+    primary_model: longcat-2.5-preview
+    fallback_models: [longcat-2.5-preview]
     prompt_version: v1

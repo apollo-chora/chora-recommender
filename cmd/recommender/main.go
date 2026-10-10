@@ -16,7 +16,7 @@
 //
 // Model selection is AGENT-DRIVEN (mirrors qgen CR 2026-06-01): the recommend
 // sub-agent's model tier + fallback chain is config-declared in the embedded
-// agentconfig YAML (HIGH = gemini-3.1-pro-preview → gemini-2.5-pro). Mana is a
+// agentconfig YAML (HIGH = longcat-2.5-preview → longcat-2.5-preview). Mana is a
 // token-budget QUOTA system (gateway-side metering), NOT a model selector, so
 // the tieredmodelplugin (mana → per-call model swap) is DELIBERATELY NOT
 // registered — see feedback_mana_is_quota_not_model_selector.
@@ -45,7 +45,7 @@
 // Env vars (NEVER inlined per feedback_no_inline_config):
 //
 //	RECOMMENDER_MODEL             — optional ops override of the agentconfig primary_model
-//	                                (HIGH tier = gemini-3.1-pro-preview); no per-call mana swap
+//	                                (HIGH tier = longcat-2.5-preview); no per-call mana swap
 //	PORT                          — REST API listen port
 //	TENANCY_GRPC_ENDPOINT         — stub:// for POC; gRPC URL in prod
 //	CONSUMPTION_GRPC_ENDPOINT     — stub:// for POC; gRPC URL in prod
@@ -286,7 +286,7 @@ func main() {
 	// directive). Mana is a token-budget QUOTA system (gateway-side metering,
 	// above) — it must NOT dictate which LLM model is used. Model selection is
 	// AGENT-DRIVEN via the embedded agentconfig YAML (recommend = HIGH tier =
-	// gemini-3.1-pro-preview → gemini-2.5-pro). The old plugin's 2.5-only
+	// longcat-2.5-preview → longcat-2.5-preview). The old plugin's 2.5-only
 	// matrix (lite/flash/pro) silently pinned every recommender call to
 	// gemini-2.5-flash-lite (empty mana_tier → tierBasic), clobbering the
 	// config's HIGH-tier primary. See

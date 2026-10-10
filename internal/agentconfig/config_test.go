@@ -17,8 +17,8 @@ func TestRecommender_HighTierLadder(t *testing.T) {
 	recommend, err := cfg.Sub("recommend")
 	require.NoError(t, err)
 	assert.Equal(t, "high", recommend.Tier)
-	assert.Equal(t, "gemini-3.1-pro-preview", recommend.PrimaryModel)
-	assert.Equal(t, []string{"gemini-2.5-pro"}, recommend.FallbackModels)
+	assert.Equal(t, "longcat-2.5-preview", recommend.PrimaryModel)
+	assert.Equal(t, []string{"longcat-2.5-preview"}, recommend.FallbackModels)
 	assert.Equal(t, "v1", recommend.PromptVersion)
 }
 

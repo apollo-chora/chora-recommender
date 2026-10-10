@@ -82,7 +82,7 @@ Configuration is controlled with environment variables:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `PORT` | HTTP listen port | `8080` |
-| `RECOMMENDER_MODEL` | Override the configured primary model | `gemini-3.1-pro-preview` |
+| `RECOMMENDER_MODEL` | Override the configured primary model | `longcat-2.5-preview` |
 | `CHORA_GATEWAY_ENDPOINT` | Model gateway gRPC target | `gateway.chora.site:443` |
 | `CHORA_GATEWAY_TENANT_ID` | Process-level fallback tenant for gateway calls | unset; required |
 | `CHORA_GATEWAY_GCID` | Process-level fallback actor for gateway calls | unset; required |
@@ -98,7 +98,7 @@ Configuration is controlled with environment variables:
 
 For production gateway connections, leave `CHORA_GATEWAY_INSECURE` unset so the client uses TLS and `CHORA_GATEWAY_TOKEN`.
 
-The embedded agent configuration in `internal/agentconfig/recommender.yaml` defines the `recommend` sub-agent as HIGH tier, with `gemini-3.1-pro-preview` as the primary model, `gemini-2.5-pro` as its fallback, and prompt version `v1`. `RECOMMENDER_MODEL` can override the primary model without changing the configured fallback chain.
+The embedded agent configuration in `internal/agentconfig/recommender.yaml` defines the `recommend` sub-agent as HIGH tier, with `longcat-2.5-preview` as the primary model, `longcat-2.5-preview` as its fallback (single-provider deployment), and prompt version `v1`. `RECOMMENDER_MODEL` can override the primary model without changing the configured fallback chain.
 
 ## Development
 
