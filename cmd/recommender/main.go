@@ -15,8 +15,8 @@
 //   - Auto-wires standard OTLP traces via chora-adk-common/tracing
 //
 // Model selection is AGENT-DRIVEN (mirrors qgen CR 2026-06-01): the recommend
-// sub-agent's model tier + fallback chain is config-declared in the embedded
-// agentconfig YAML (HIGH = gemini-3.1-pro-preview → gemini-2.5-pro). Mana is a
+// sub-agent's tier + prompt version is config-declared in the embedded
+// agentconfig YAML, while its model id is env-only and REQUIRED. Mana is a
 // token-budget QUOTA system (gateway-side metering), NOT a model selector, so
 // the tieredmodelplugin (mana → per-call model swap) is DELIBERATELY NOT
 // registered — see feedback_mana_is_quota_not_model_selector.
@@ -44,8 +44,9 @@
 //
 // Env vars (NEVER inlined per feedback_no_inline_config):
 //
-//	RECOMMENDER_MODEL             — optional ops override of the agentconfig primary_model
-//	                                (HIGH tier = gemini-3.1-pro-preview); no per-call mana swap
+//	RECOMMENDER_MODEL             — gateway logical_model_id for the recommend
+//	                                sub-agent (REQUIRED; env-only, no default)
+//	RECOMMENDER_FALLBACK_MODELS   — optional comma-separated fallback chain (empty = none)
 //	PORT                          — REST API listen port
 //	TENANCY_GRPC_ENDPOINT         — stub:// for POC; gRPC URL in prod
 //	CONSUMPTION_GRPC_ENDPOINT     — stub:// for POC; gRPC URL in prod
@@ -63,6 +64,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"log/slog"
 	"net/http"
@@ -117,6 +119,55 @@ func envOr(name, fallback string) string {
 	return fallback
 }
 
+// Model env names (names only; values come from the container env per
+// feedback_no_inline_config). RECOMMENDER_MODEL is REQUIRED — boot fails loud
+// when it is unset rather than falling back to a literal model name.
+// RECOMMENDER_FALLBACK_MODELS is an optional comma-separated chain: unset (the
+// default) declares no fallback.
+const (
+	envRecommenderModel    = "RECOMMENDER_MODEL"
+	envRecommenderFallback = "RECOMMENDER_FALLBACK_MODELS"
+)
+
+// requiredModel returns the env-provided gateway logical_model_id, failing
+// loud when the var is unset. Model ids are env-only: there is no literal
+// default to fall back to (feedback_no_inline_config).
+func requiredModel(name string) (string, error) {
+	v := strings.TrimSpace(os.Getenv(name))
+	if v == "" {
+		return "", fmt.Errorf("%s required (the gateway logical_model_id; env-only, no default)", name)
+	}
+	return v, nil
+}
+
+// fallbackModels parses a comma-separated env list into the declared fallback
+// chain. Unset / blank (the default) declares no chain, so the gateway is
+// asked for the primary target only.
+func fallbackModels(name string) []string {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return nil
+	}
+	var out []string
+	for _, part := range strings.Split(raw, ",") {
+		if p := strings.TrimSpace(part); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// resolveModel resolves the recommend sub-agent's env-only model id and
+// declared fallback chain. RECOMMENDER_MODEL is REQUIRED, so a deploy that
+// forgets it dies at boot rather than routing to a literal model name.
+func resolveModel() (model string, fallback []string, err error) {
+	model, err = requiredModel(envRecommenderModel)
+	if err != nil {
+		return "", nil, err
+	}
+	return model, fallbackModels(envRecommenderFallback), nil
+}
+
 func main() {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stderr, nil)))
 	ctx := context.Background()
@@ -138,12 +189,12 @@ func main() {
 	}()
 
 	// AGENT-DRIVEN model selection (mirrors qgen CR 2026-06-01): the single
-	// `recommend` sub-agent's tier + primary + fallback chain is the single
-	// source of truth in the embedded agentconfig YAML (HIGH = ranking
-	// quality). Fail loud on a missing / malformed config — never a silent
-	// default (feedback_no_stubs_real_wiring). RECOMMENDER_MODEL may override
-	// the primary for quick ops experiments; tier + fallback stay
-	// config-declared.
+	// `recommend` sub-agent's tier + prompt version is the source of truth in
+	// the embedded agentconfig YAML. Its model id is env-only and REQUIRED
+	// (RECOMMENDER_MODEL) and its fallback chain comes from the optional
+	// RECOMMENDER_FALLBACK_MODELS comma list. Fail loud on a missing /
+	// malformed config — never a silent default
+	// (feedback_no_stubs_real_wiring).
 	rcfg, err := agentconfig.Recommender()
 	if err != nil {
 		log.Fatalf("recommender: load agent config: %v", err)
@@ -152,7 +203,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("recommender: %v", err)
 	}
-	modelName := envOr("RECOMMENDER_MODEL", recommendCfg.PrimaryModel)
+	modelName, modelFallback, err := resolveModel()
+	if err != nil {
+		log.Fatalf("recommender: %v", err)
+	}
 
 	tenancyEndpoint := envOr("TENANCY_GRPC_ENDPOINT", "stub://chora-tenancy")
 	consumptionEndpoint := envOr("CONSUMPTION_GRPC_ENDPOINT", "stub://chora-consumption")
@@ -176,7 +230,7 @@ func main() {
 		"built", buildTime,
 		"model", modelName,
 		"model_tier", recommendCfg.Tier,
-		"model_fallback", recommendCfg.FallbackModels,
+		"model_fallback", modelFallback,
 		"prompt_version", recommendCfg.PromptVersion,
 		"tenancy_endpoint", tenancyEndpoint,
 		"consumption_endpoint", consumptionEndpoint,
@@ -187,10 +241,10 @@ func main() {
 	// Model — route through chora-model-gateway (ADR-177 full mana umbrella).
 	// Every recommend LLM turn flows through the one metered chokepoint
 	// (central model policy enforcement, per-tenant budget, token-usage
-	// ledger). modelName stays AGENT-DRIVEN (the agentconfig HIGH-tier
-	// primary, env-overridable); fallback chain is forwarded so the gateway
-	// honours it. Per-request tenant/gcid come from session state via the
-	// propagation plugin; the env values are the process fallback.
+	// ledger). modelName is env-provided (RECOMMENDER_MODEL) and the declared
+	// fallback chain is forwarded so the gateway honours it. Per-request
+	// tenant/gcid come from session state via the propagation plugin; the env
+	// values are the process fallback.
 	gatewayEndpoint := envOr("CHORA_GATEWAY_ENDPOINT", "gateway.chora.site:443")
 	// D6 step 1: the ID-token audience is read HERE and defaulted explicitly.
 	// modelgatewayclient still defaults it internally in TWO places
@@ -204,7 +258,7 @@ func main() {
 			"(process fallback; per-request values come from session state — no silent " +
 			"mis-attribution per ADR-169 + feedback_no_stubs_real_wiring)")
 	}
-	model, err := modelgatewayclient.New(ctx, recommenderGatewayConfig(crewKind, gatewayEndpoint, gatewayGCID, gatewayTenantID, modelName, recommendCfg, gatewayAudience, gatewayInsecure()))
+	model, err := modelgatewayclient.New(ctx, recommenderGatewayConfig(crewKind, gatewayEndpoint, gatewayGCID, gatewayTenantID, modelName, modelFallback, gatewayAudience, gatewayInsecure()))
 	if err != nil {
 		log.Fatalf("recommender: modelgatewayclient.New: %v", err)
 	}
@@ -285,11 +339,10 @@ func main() {
 	// DELIBERATELY NOT registered here (mirrors qgen CR 2026-06-01, user
 	// directive). Mana is a token-budget QUOTA system (gateway-side metering,
 	// above) — it must NOT dictate which LLM model is used. Model selection is
-	// AGENT-DRIVEN via the embedded agentconfig YAML (recommend = HIGH tier =
-	// gemini-3.1-pro-preview → gemini-2.5-pro). The old plugin's 2.5-only
-	// matrix (lite/flash/pro) silently pinned every recommender call to
-	// gemini-2.5-flash-lite (empty mana_tier → tierBasic), clobbering the
-	// config's HIGH-tier primary. See
+	// AGENT-DRIVEN via the env-provided model id (recommend = HIGH tier). The
+	// old plugin's 2.5-only matrix (lite/flash/pro) silently pinned every
+	// recommender call to its lite text model (empty mana_tier → tierBasic),
+	// clobbering the configured HIGH-tier primary. See
 	// feedback_mana_is_quota_not_model_selector + the CR tracker.
 
 	// Termination plugin — emits chora.ai_kernel.agent.terminated.v1 on
@@ -422,12 +475,13 @@ const crewSurface = "content_recommender"
 // recommenderGatewayConfig is the gateway client identity of the content_recommender call. Surface is
 // the crew id (ADR-254 D7): the D7 gateway refuses an unstamped Invoke
 // (FAILED_PRECONDITION surface_unstamped), so it is set here, once, and
-// asserted by a test; everything else is what the call always sent.
-func recommenderGatewayConfig(crewKind string, gatewayEndpoint string, gatewayGCID string, gatewayTenantID string, modelName string, recommendCfg agentconfig.SubAgentConfig, gatewayAudience string, insecure bool) modelgatewayclient.Config {
+// asserted by a test; everything else is what the call always sent. The model
+// id and the declared fallback chain are env-provided (see resolveModel).
+func recommenderGatewayConfig(crewKind string, gatewayEndpoint string, gatewayGCID string, gatewayTenantID string, modelName string, fallbackModels []string, gatewayAudience string, insecure bool) modelgatewayclient.Config {
 	return modelgatewayclient.Config{
 		Endpoint:         gatewayEndpoint,
 		LogicalModelID:   modelName,
-		FallbackModelIDs: recommendCfg.FallbackModels,
+		FallbackModelIDs: fallbackModels,
 		AgentID:          "content_recommender",
 		CrewKind:         crewKind,
 		TenantID:         gatewayTenantID,
