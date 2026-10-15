@@ -28,6 +28,7 @@ export CHORA_GATEWAY_GCID=gcid-1
 export CHORA_GATEWAY_ENDPOINT=localhost:9090
 export CHORA_GATEWAY_INSECURE=1
 export CONSUMPTION_GRPC_ENDPOINT=stub://chora-consumption
+export RECOMMENDER_MODEL=<text-model-id>
 
 go run ./cmd/recommender
 ```
@@ -43,6 +44,7 @@ docker run --rm -p 8080:8080 \
   -e CHORA_GATEWAY_GCID=gcid-1 \
   -e CHORA_GATEWAY_ENDPOINT=host.docker.internal:9090 \
   -e CHORA_GATEWAY_INSECURE=1 \
+  -e RECOMMENDER_MODEL=<text-model-id> \
   chora-recommender
 ```
 
@@ -82,7 +84,8 @@ Configuration is controlled with environment variables:
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `PORT` | HTTP listen port | `8080` |
-| `RECOMMENDER_MODEL` | Override the configured primary model | `longcat-2.5-preview` |
+| `RECOMMENDER_MODEL` | Gateway logical model id for the recommend sub-agent | unset; required |
+| `RECOMMENDER_FALLBACK_MODELS` | Fallback chain (comma-separated) | unset (no chain) |
 | `CHORA_GATEWAY_ENDPOINT` | Model gateway gRPC target | `gateway.chora.site:443` |
 | `CHORA_GATEWAY_TENANT_ID` | Process-level fallback tenant for gateway calls | unset; required |
 | `CHORA_GATEWAY_GCID` | Process-level fallback actor for gateway calls | unset; required |
@@ -98,7 +101,7 @@ Configuration is controlled with environment variables:
 
 For production gateway connections, leave `CHORA_GATEWAY_INSECURE` unset so the client uses TLS and `CHORA_GATEWAY_TOKEN`.
 
-The embedded agent configuration in `internal/agentconfig/recommender.yaml` defines the `recommend` sub-agent as HIGH tier, with `longcat-2.5-preview` as the primary model and its fallback (the deployment's model gateway serves this single text model), and prompt version `v1`. `RECOMMENDER_MODEL` can override the primary model without changing the configured fallback chain.
+The embedded agent configuration in `internal/agentconfig/recommender.yaml` defines the `recommend` sub-agent as HIGH tier with prompt version `v1`; it declares no model name. The gateway `logical_model_id` comes from the required `RECOMMENDER_MODEL` environment variable (boot fails when it is unset), and the optional `RECOMMENDER_FALLBACK_MODELS` comma-separated chain is forwarded to the gateway as the declared fallback.
 
 ## Development
 
@@ -107,7 +110,7 @@ The repository is organized around the service entry point, agent composition, c
 ```text
 cmd/recommender/                  Service entry point and HTTP server
 internal/agent/                   Prompt composition and per-turn instruction provider
-internal/agentconfig/             Embedded model and prompt configuration
+internal/agentconfig/             Embedded tier and prompt configuration
 internal/tool/                    Recommendation tool and Searcher port
 internal/adapter/consumptionrag/  gRPC adapter for chora-consumption
 ```
